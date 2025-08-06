@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <cstring>
+#include <thread>
 #include <algorithm>
 #include <windows.h>
 
@@ -23,24 +24,26 @@ SDL_Window* window;
 SDL_Renderer* renderer;
 SDL_Event e;
 
-const ImGuiWindowFlags mainWindowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar;
+ImFont* guiFont;
+ImFont* consoleFont;
+constexpr float WIDGET_ROUNDING = 2.5f;
+constexpr ImU32 LIGHT_GRAY = IM_COL32(200, 200, 200, 255);
+constexpr ImU32 GRAY = IM_COL32(150, 150, 150, 255);
+constexpr ImU32 DARK_GRAY = IM_COL32(100, 100, 100, 255);
+constexpr ImGuiWindowFlags mainWindowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar;
 
 const int WIDTH = 720, HEIGHT = 720;
 bool running = true;
 char pathYTDLP[1024]{};
+char pathFF[1024]{};
 char pathOutput[1024]{};
 bool valueMP3 = false;
 bool valueMP4 = false;
 std::string outputLog{};
 
 
-void log(std::string msg) {
-    std::cout << msg << std::endl;
-}
-
-
-void debug(std::string msg) {
-    std::cout << "[DEBUG] " << msg << std::endl;
+void log(const std::string& msg) {
+    outputLog += "[Yoink] " + msg + "\n";
 }
 
 
@@ -55,7 +58,7 @@ int dump() {
     secAttr.lpSecurityDescriptor = nullptr; // no custom security rules, just default permissions
 
     if (!CreatePipe(&hRead, &hWrite, &secAttr, 0)) { // create the actual pipe
-        debug("Failed to create pipe");
+        log("Failed to create pipe");
         return 1;
     }
 
@@ -72,9 +75,15 @@ int dump() {
     si.hStdError = hWrite; // redirect child error to the new pipe
     si.wShowWindow = SW_HIDE; // specify to hide the window
 
-    std::string command = "C://Users//david//Downloads//yt-dlp.exe --version";
+    std::string command =
+        "C:/Users/david/Downloads/yt-dlp.exe "
+        "--force-ipv4 --format bestaudio --extract-audio "
+        "--audio-format mp3 --audio-quality 160K "
+        "--paths \"C:/Users/david/Documents\" "
+        "https://www.youtube.com/watch?v=HpyZEzrDf4c";
     strcpy_s(cmdLine, command.c_str());
 
+    std::string workingDir = "C:\\";
     bool success = CreateProcessA(
         nullptr,             // lpApplicationName (null = take from cmdLine)
         cmdLine,             // full command line (must be mutable)
@@ -83,7 +92,7 @@ int dump() {
         TRUE,                // inherit handles (required for our pipe to work!)
         CREATE_NO_WINDOW,    // don’t open a new console window
         nullptr,             // environment (null = inherit from parent)
-        nullptr,             // current directory (null = inherit)
+        workingDir.c_str(),             // current directory (null = inherit)
         &si,                 // startup info (controls redirection, visibility)
         &pi                  // receives process info
     );
@@ -91,7 +100,7 @@ int dump() {
     CloseHandle(hWrite); // only read now
 
     if (!success) { // make sure the process actually started
-        debug("Failed to create process");
+        log("Failed to create process");
         CloseHandle(hRead);
         return 1;
     }
@@ -162,6 +171,20 @@ int init() {
     // imgui components
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImGui::StyleColorsLight();
+
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    guiFont = io.Fonts->AddFontFromFileTTF("res/Segoe-UI-Variable-Static-Text.ttf", 24.0f);
+    if (guiFont == nullptr) {
+        log("Could not load font for GUI");
+        return 1;
+    }
+    consoleFont = io.Fonts->AddFontFromFileTTF("res/CascadiaMono-VariableFont_wght.ttf", 18.0f);
+    if (consoleFont == nullptr) {
+        log("Could not load font for subconsole");
+        return 1;
+    }
+
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer3_Init(renderer);
 
@@ -182,27 +205,83 @@ void shutdown() {
 }
 
 
+void pushDrawInputText() {
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, WIDGET_ROUNDING);
+}
+
+
+void popDrawInputText() {
+    ImGui::PopStyleVar(2);
+}
+
+
+void pushDrawButton() {
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, WIDGET_ROUNDING);
+    ImGui::PushStyleColor(ImGuiCol_Button, LIGHT_GRAY);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, GRAY);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, DARK_GRAY);
+}
+
+
+void popDrawButton() {
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(1);
+}
+
+
 void draw() {
+    ImVec2 inputTextRef;
+
     ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2(WIDTH, 200));
+    ImGui::SetNextWindowSize(ImVec2(WIDTH, 400));
     ImGui::Begin("main", nullptr, mainWindowFlags);
+
     ImGui::SeparatorText("File Paths");
-    ImGui::Text("YT-DLP Executable Path");
+
+    ImGui::Text("YT-DLP Executable");
     ImGui::SameLine();
+    pushDrawInputText();
     ImGui::InputText("##pathYTDLP", pathYTDLP, IM_ARRAYSIZE(pathYTDLP));
+    popDrawInputText();
+    inputTextRef = ImGui::GetItemRectMin(); // to line up other input text widgets
     ImGui::SameLine();
+    pushDrawButton();
     if (ImGui::Button("Open##ytdlp")) {
         const char* filterPatterns[1] = { "*.exe" };
-        char* openFileName = tinyfd_openFileDialog("Select the YT-DLP.exe to use", nullptr, 1, filterPatterns, "Executable File (*.exe)", 1);
+        char* openFileName = tinyfd_openFileDialog("Select the yt-dlp.exe to use", nullptr, 1, filterPatterns, "Executable File (*.exe)", 1);
         if (openFileName) {
             strcpy_s(pathYTDLP, sizeof(pathYTDLP), openFileName);
             std::replace(std::begin(pathYTDLP), std::end(pathYTDLP), '\\', '/');
         }
     }
-    ImGui::Text("Output Path");
+    popDrawButton();
+
+    ImGui::Text("FFmpeg/ffprobe");
     ImGui::SameLine();
+    ImGui::SetCursorPosX(inputTextRef.x);
+    pushDrawInputText();
+    ImGui::InputText("##pathFF", pathFF, IM_ARRAYSIZE(pathFF));
+    popDrawInputText();
+    ImGui::SameLine();
+    pushDrawButton();
+    if (ImGui::Button("Open##ff")) {
+        char* openFolderName = tinyfd_selectFolderDialog("Select the folder with FFmpeg and ffprobe", nullptr);
+        if (openFolderName) {
+            strcpy_s(pathFF, sizeof(pathFF), openFolderName);
+            std::replace(std::begin(pathFF), std::end(pathFF), '\\', '/');
+        }
+    }
+    popDrawButton();
+
+    ImGui::Text("Output");
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(inputTextRef.x);
+    pushDrawInputText();
     ImGui::InputText("##pathOutput", pathOutput, IM_ARRAYSIZE(pathOutput));
+    popDrawInputText();
     ImGui::SameLine();
+    pushDrawButton();
     if (ImGui::Button("Open##output")) {
         char* openFolderName = tinyfd_selectFolderDialog("Select a folder to output files", nullptr);
         if (openFolderName) {
@@ -210,33 +289,44 @@ void draw() {
             std::replace(std::begin(pathOutput), std::end(pathOutput), '\\', '/');
         }
     }
-    ImGui::SeparatorText("Media Options");
+    popDrawButton();
+
+    ImGui::Dummy(ImVec2(0, 25));
+    ImGui::SeparatorText("Options");
+
     ImGui::Text("Media Type");
     ImGui::SameLine();
     ImGui::Checkbox("MP3", &valueMP3);
-    ImGui::SameLine();
-    ImGui::Checkbox("MP4", &valueMP4);
+    //ImGui::SameLine();
+    //ImGui::Checkbox("MP4", &valueMP4);
     ImGui::Text("MP3 Options");
-    ImGui::Text("MP4 Options");
-    if (ImGui::Button("Yoink")) {
-        int success = dump();
-        if (success == 1) {
-            debug("Attempt failed");
-        }
-    }
-    ImGui::End();
+    //ImGui::Text("MP4 Options");
 
-    ImGui::Begin("Log");
+    pushDrawButton();
+    if (ImGui::Button("Yoink")) {
+        std::thread([] {
+            int success = dump();
+            if (success == 1) {
+                log("Attempt failed");
+            }
+        }).detach(); // run in background
+    }
+    popDrawButton();
+    ImGui::End(); // end of main window
+
+    ImGui::Begin("Log", nullptr, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PushFont(consoleFont);
     ImGui::Text(outputLog.c_str());
+    ImGui::PopFont();
     ImGui::End();
 }
 
 
 int main(int argc, char* args[]) {
-    debug("YoinkTube starting");
+    log("YoinkTube started");
 
     if (init() == 1) {
-        debug("YoinkTube failed");
+        log("YoinkTube failed");
         shutdown();
         exit(1);
     }
@@ -273,6 +363,5 @@ int main(int argc, char* args[]) {
     }
 
     shutdown();
-    debug("YoinkTube terminating");
     return 0;
 }
