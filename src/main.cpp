@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstring>
 #include <thread>
+#include <deque>
 #include <algorithm>
 #include <windows.h>
 
@@ -34,20 +35,55 @@ constexpr ImGuiWindowFlags mainWindowFlags = ImGuiWindowFlags_NoDecoration | ImG
 
 const int WIDTH = 720, HEIGHT = 720;
 bool running = true;
-char pathYTDLP[1024]{};
-char pathFF[1024]{};
-char pathOutput[1024]{};
-bool valueMP3 = false;
-bool valueMP4 = false;
-std::string outputLog{};
+bool autoscroll = false;
+bool yoinking = false;
+char ytLink[2048] = "https://www.youtube.com/watch?v=HpyZEzrDf4c";
+char pathYTDLP[1024] = "C:/Users/david/Downloads/yt-dlp.exe";
+char pathFF[1024] = "C:/Users/david/Downloads";
+char pathOutput[1024] = "C:/Users/david/Downloads";
+bool checkAudio = false;
+bool checkVideo = false;
+bool checkPlaylist = false;
+std::deque<std::string> logLines;
+const size_t MAX_LOG_LINES = 10000; // adjust this based on memory budget
 
 
 void log(const std::string& msg) {
-    outputLog += "[Yoink] " + msg + "\n";
+    logLines.push_back("[Yoink] " + msg);
+    if (logLines.size() > MAX_LOG_LINES)
+        logLines.pop_front();
+    autoscroll = true;
 }
 
 
-int dump() {
+int checkFields() {
+    short allow = 0;
+    if (ytLink[0] == '\0') {
+        log("ERROR: No YouTube link provided");
+        allow = 1;
+    }
+    if (pathYTDLP[0] == '\0') {
+        log("ERROR: YT-DLP path is empty");
+        allow = 1;
+    }
+    if (pathFF[0] == '\0') {
+        log("ERROR: FFmpeg/ffprobe path is empty");
+        allow = 1;
+    }
+    if (pathOutput[0] == '\0') {
+        log("ERROR: Output path is empty");
+        allow = 1;
+    }
+    if (!checkAudio && !checkVideo) {
+        log("ERROR: At least one Media Type needs to be selected");
+        allow = 1;
+    }
+    return allow;
+}
+
+
+void yoink(std::string command) {
+    logLines.clear();
     /* create a pipe for stdout/stderr redirection */
     SECURITY_ATTRIBUTES secAttr{};
     HANDLE hRead = nullptr;
@@ -59,7 +95,7 @@ int dump() {
 
     if (!CreatePipe(&hRead, &hWrite, &secAttr, 0)) { // create the actual pipe
         log("Failed to create pipe");
-        return 1;
+        return;
     }
 
     SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0); // prevent the child process from inheriting the read end of the pipe
@@ -67,21 +103,14 @@ int dump() {
     /* setup STARTUPINFO with new pipe */
     STARTUPINFOA si{};
     PROCESS_INFORMATION pi{};
-    char cmdLine[4096];
+    char cmdLine[8192];
+    strcpy_s(cmdLine, command.c_str());
 
     si.cb = sizeof(STARTUPINFOA); // set the size of the struct
     si.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW; // specify which fields to use
     si.hStdOutput = hWrite; // redirect child output to the new pipe
     si.hStdError = hWrite; // redirect child error to the new pipe
     si.wShowWindow = SW_HIDE; // specify to hide the window
-
-    std::string command =
-        "C:/Users/david/Downloads/yt-dlp.exe "
-        "--force-ipv4 --format bestaudio --extract-audio "
-        "--audio-format mp3 --audio-quality 160K "
-        "--paths \"C:/Users/david/Documents\" "
-        "https://www.youtube.com/watch?v=HpyZEzrDf4c";
-    strcpy_s(cmdLine, command.c_str());
 
     std::string workingDir = "C:\\";
     bool success = CreateProcessA(
@@ -102,7 +131,7 @@ int dump() {
     if (!success) { // make sure the process actually started
         log("Failed to create process");
         CloseHandle(hRead);
-        return 1;
+        return;
     }
 
     /* read from the pipe while the child is running */
@@ -128,9 +157,10 @@ int dump() {
         lineBuffer += buffer; // append the new data to the accumulated line buffer
 
         size_t pos = 0; // cursor position inside the line buffer
-        while ((pos = lineBuffer.find('\n')) != std::string::npos) {  // search for a complete line that ends with the newline character
-            outputLog.append(lineBuffer.substr(0, pos + 1)); // extract and log the full line, including the newline
-            lineBuffer.erase(0, pos + 1); // remove the logged line from the buffer and repeat
+        while ((pos = lineBuffer.find_first_of("\r\n")) != std::string::npos) {
+            logLines.push_back(lineBuffer.substr(0, pos + 1));
+            lineBuffer.erase(0, pos + 1);
+            autoscroll = true;
         }
     }
 
@@ -140,8 +170,6 @@ int dump() {
     WaitForSingleObject(pi.hProcess, 600000); // wait 10 minutes
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
-
-    return 0;
 }
 
 
@@ -174,7 +202,7 @@ int init() {
     ImGui::StyleColorsLight();
 
     ImGuiIO& io = ImGui::GetIO(); (void)io;
-    guiFont = io.Fonts->AddFontFromFileTTF("res/Segoe-UI-Variable-Static-Text.ttf", 24.0f);
+    guiFont = io.Fonts->AddFontFromFileTTF("res/Segoe-UI-Variable-Static-Text.ttf", 26.0f);
     if (guiFont == nullptr) {
         log("Could not load font for GUI");
         return 1;
@@ -231,13 +259,12 @@ void popDrawButton() {
 
 
 void draw() {
-    ImVec2 inputTextRef;
+    int windowHeight = 318;
+    ImVec2 inputTextRef, buttonRefPos, buttonRefSize;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2(WIDTH, 400));
+    ImGui::SetNextWindowSize(ImVec2(WIDTH, windowHeight));
     ImGui::Begin("main", nullptr, mainWindowFlags);
-
-    ImGui::SeparatorText("File Paths");
 
     ImGui::Text("YT-DLP Executable");
     ImGui::SameLine();
@@ -256,6 +283,8 @@ void draw() {
         }
     }
     popDrawButton();
+    buttonRefPos = ImGui::GetItemRectMin();
+    buttonRefSize = ImGui::GetItemRectSize();
 
     ImGui::Text("FFmpeg/ffprobe");
     ImGui::SameLine();
@@ -291,32 +320,100 @@ void draw() {
     }
     popDrawButton();
 
-    ImGui::Dummy(ImVec2(0, 25));
-    ImGui::SeparatorText("Options");
+    ImGui::Dummy(ImVec2(0, 10));
+    //ImGui::SeparatorText("Options");
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0, 10));
 
-    ImGui::Text("Media Type");
+    ImGui::Text("Options");
     ImGui::SameLine();
-    ImGui::Checkbox("MP3", &valueMP3);
-    //ImGui::SameLine();
-    //ImGui::Checkbox("MP4", &valueMP4);
-    ImGui::Text("MP3 Options");
-    //ImGui::Text("MP4 Options");
+    ImGui::SetCursorPosX(inputTextRef.x);
+    ImGui::Checkbox("Audio", &checkAudio);
+    ImGui::SameLine();
+    ImGui::Checkbox("Video", &checkVideo);
+    ImGui::SameLine();
+    ImGui::Checkbox("Playlist", &checkPlaylist);
 
+    ImGui::Text("YouTube Link");
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(inputTextRef.x);
+    ImGui::SetNextItemWidth(buttonRefPos.x + buttonRefSize.x - inputTextRef.x);
+    pushDrawInputText();
+    ImGui::InputText("##ytLink", ytLink, IM_ARRAYSIZE(ytLink));
+    popDrawInputText();
+    ImGui::Dummy(ImVec2(0, 25));
+
+    float windowWidth = ImGui::GetWindowSize().x;
+    float buttonWidth = ImGui::CalcTextSize("Yoink").x + ImGui::GetStyle().FramePadding.x * 2;
+    ImGui::SetCursorPosX((windowWidth - buttonWidth) * 0.5f);
+    if (yoinking) ImGui::BeginDisabled();
     pushDrawButton();
-    if (ImGui::Button("Yoink")) {
+    if (ImGui::Button("Yoink") && !yoinking) {
         std::thread([] {
-            int success = dump();
-            if (success == 1) {
-                log("Attempt failed");
+            if (checkFields() != 1) {
+                yoinking = true;
+                log("Yoink started");
+                std::string command;
+
+                if (checkAudio && checkVideo) {
+                    command = "\"" + std::string(pathYTDLP) + "\"";
+                    command += " --no-progress";
+                    command += " --ffmpeg-location \"" + std::string(pathFF) + "\"";
+                    command += " --path \"" + std::string(pathOutput) + "\"";
+                    command += " --output \"%(title)s.%(ext)s\"";
+                    command += " --format \"bestaudio[ext=m4a]/bestaudio/best\" --extract-audio --audio-format mp3 --audio-quality 0";
+                    command += " " + std::string(ytLink);
+                    yoink(command);
+                    
+                    command = "\"" + std::string(pathYTDLP) + "\"";
+                    command += " --no-progress";
+                    command += " --ffmpeg-location \"" + std::string(pathFF) + "\"";
+                    command += " --path \"" + std::string(pathOutput) + "\"";
+                    command += " --output \"%(title)s.%(ext)s\"";
+                    command += " --format \"bv*+ba/b\"";
+                    command += " " + std::string(ytLink);
+                    yoink(command);
+                } else if (checkAudio && !checkVideo) {
+                    command = "\"" + std::string(pathYTDLP) + "\"";
+                    command += " --no-progress";
+                    command += " --ffmpeg-location \"" + std::string(pathFF) + "\"";
+                    command += " --path \"" + std::string(pathOutput) + "\"";
+                    command += " --output \"%(title)s.%(ext)s\"";
+                    command += " --format \"bestaudio[ext=m4a]/bestaudio/best\" --extract-audio --audio-format mp3 --audio-quality 0";
+                    command += " " + std::string(ytLink);
+                    yoink(command);
+                } else if (checkVideo && !checkAudio) {
+                    command = "\"" + std::string(pathYTDLP) + "\"";
+                    command += " --no-progress";
+                    command += " --ffmpeg-location \"" + std::string(pathFF) + "\"";
+                    command += " --path \"" + std::string(pathOutput) + "\"";
+                    command += " --output \"%(title)s.%(ext)s\"";
+                    command += " --format \"bv*+ba/b\"";
+                    command += " " + std::string(ytLink);
+                    yoink(command);
+                }
+
+                yoinking = false;
+                log("Yoink complete");
             }
         }).detach(); // run in background
     }
     popDrawButton();
+    if (yoinking) ImGui::EndDisabled();
+    ImGui::Dummy(ImVec2(0, 25));
     ImGui::End(); // end of main window
-
-    ImGui::Begin("Log", nullptr, ImGuiWindowFlags_HorizontalScrollbar);
+    
+    ImGui::SetNextWindowPos(ImVec2(0, windowHeight));
+    ImGui::SetNextWindowSize(ImVec2(WIDTH, HEIGHT - windowHeight));
+    ImGui::Begin("Log", nullptr, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
     ImGui::PushFont(consoleFont);
-    ImGui::Text(outputLog.c_str());
+    for (const std::string& line : logLines) {
+        ImGui::TextUnformatted(line.c_str());
+    }
+    if (autoscroll) {
+        ImGui::SetScrollHereY(1.0f);
+        autoscroll = false;
+    }
     ImGui::PopFont();
     ImGui::End();
 }
