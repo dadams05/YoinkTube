@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <cstring>
+#include <string>
 #include <thread>
 #include <fstream>
 #include <deque>
@@ -20,7 +21,6 @@
 
 // v3.19.3
 #include "tinyfiledialogs/tinyfiledialogs.h"
-
 
 SDL_Event e;
 SDL_Window* window;
@@ -42,15 +42,12 @@ bool running = true;
 
 bool yoinking = false;
 char ytLink[1024]{};
-char pathYTDLP[1024] = "C:/Users/david/Downloads/yt-dlp.exe";
-char pathFF[1024] = "C:/Users/david/Downloads";
-char pathOutput[1024] = "C:/Users/david/Downloads";
+char pathYTDLP[1024]{};
+char pathFF[1024]{};
+char pathOutput[1024]{};
 bool checkAudio = false;
 bool checkVideo = false;
 bool checkPlaylist = false;
-
-
-
 
 const int BASE_WIDTH = 800, BASE_HEIGHT = 500;
 int width = BASE_WIDTH, height = BASE_HEIGHT;
@@ -59,9 +56,6 @@ bool logScroll = false;
 
 std::deque<std::string> logLines;
 const size_t MAX_LOG_LINES = 10000;
-
-
-
 
 
 void log(const std::string& msg) {
@@ -252,18 +246,76 @@ int init() {
         log("Could not load font for subconsole");
         return 1;
     }
+    io.FontDefault = guiFont;
+    
 
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer3_Init(renderer);
-
+    io.Fonts->Build();
     rescale(true); // rescale the entire gui
 
 
+    std::string line;
     std::ifstream s("./config.txt");
     if (s.is_open()) {
-        std::cout << "opened" << std::endl;
+        while (std::getline(s, line)) {
+            size_t foundPos;
+
+            foundPos = line.find("[Link]");
+            if (foundPos != std::string::npos) {
+                std::string sub = line.substr(foundPos + strlen("[Link]"));
+                if (sub.size() < sizeof(ytLink)) {
+                    memcpy_s(ytLink, sizeof(ytLink), sub.c_str(), sub.size() + 1);
+                }
+                else {
+                    std::cerr << "ytLink buffer is too small for the string." << std::endl;
+                }
+                continue;  // Continue to next line (optional)
+            }
+
+            foundPos = line.find("[Output]");
+            if (foundPos != std::string::npos) {
+                std::string sub = line.substr(foundPos + strlen("[Output]"));
+                if (sub.size() < sizeof(pathOutput)) {
+                    memcpy_s(pathOutput, sizeof(pathOutput), sub.c_str(), sub.size() + 1);
+                }
+                else {
+                    std::cerr << "pathOutput buffer is too small for the string." << std::endl;
+                }
+                continue;
+            }
+
+            foundPos = line.find("[FFmpeg]");
+            if (foundPos != std::string::npos) {
+                std::string sub = line.substr(foundPos + strlen("[FFmpeg]"));
+                if (sub.size() < sizeof(pathFF)) {
+                    memcpy_s(pathFF, sizeof(pathFF), sub.c_str(), sub.size() + 1);
+                }
+                else {
+                    std::cerr << "pathFF buffer is too small for the string." << std::endl;
+                }
+                continue;
+            }
+
+            foundPos = line.find("[YTDLP]");
+            if (foundPos != std::string::npos) {
+                std::string sub = line.substr(foundPos + strlen("[YTDLP]"));
+                if (sub.size() < sizeof(pathYTDLP)) {
+                    memcpy_s(pathYTDLP, sizeof(pathYTDLP), sub.c_str(), sub.size() + 1);
+                }
+                else {
+                    std::cerr << "pathYTDLP buffer is too small for the string." << std::endl;
+                }
+                continue;
+            }
+        }
     }
     s.close();
+
+
+
+
+
 
 
     return 0;
@@ -271,6 +323,18 @@ int init() {
 
 
 void shutdown() {
+    // write to file
+    std::ofstream s("./config.txt");
+    if (s.is_open()) {
+        std::cout << "writnig" << std::endl;
+        s << "[Link]" << std::string(ytLink) << "\n";
+        s << "[Output]" << std::string(pathOutput) << "\n";
+        s << "[FFmpeg]" << std::string(pathFF) << "\n";
+        s << "[YTDLP]" << std::string(pathYTDLP) << "\n";
+        s.close();
+    }
+    
+
     // imgui components
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
@@ -311,9 +375,6 @@ void popDrawButton() {
     ImGui::PopStyleColor(3);
     ImGui::PopStyleVar(1);
 }
-
-
-
 
 
 void draw() {
@@ -387,6 +448,19 @@ void draw() {
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, dummyHeight));
 
+    ImGui::Text("YouTube Link");
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(inputTextRef.x);
+    pushDrawInputText();
+    ImGui::InputText("##ytLink", ytLink, IM_ARRAYSIZE(ytLink));
+    popDrawInputText();
+    ImGui::SameLine();
+    pushDrawButton();
+    if (ImGui::Button("Clear")) {
+        memset(ytLink, '\0', sizeof(ytLink));
+    }
+    popDrawButton();
+
     ImGui::Text("Options");
     ImGui::SameLine();
     ImGui::SetCursorPosX(inputTextRef.x);
@@ -402,21 +476,7 @@ void draw() {
     ImGui::Checkbox("Playlist", &checkPlaylist);
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);
-
-    ImGui::Text("YouTube Link");
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(inputTextRef.x);
-    pushDrawInputText();
-    ImGui::InputText("##ytLink", ytLink, IM_ARRAYSIZE(ytLink));
-    popDrawInputText();
-    ImGui::SameLine();
-    pushDrawButton();
-    if (ImGui::Button("Clear")) {
-        memset(ytLink, '\0', sizeof(ytLink));
-    }
-    popDrawButton();
     remaining = ImGui::GetItemRectMin();
-    //ImGui::Dummy(ImVec2(0, dummyHeight2));
 
     float windowWidth = ImGui::GetWindowSize().x;
     float windowHeight = ImGui::GetWindowSize().y;
@@ -549,11 +609,3 @@ int main(int argc, char* args[]) {
     shutdown();
     return 0;
 }
-
-
-
-
-/*
-save inputted text
-update the readme
-*/
