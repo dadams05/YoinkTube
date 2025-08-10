@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstring>
 #include <thread>
+#include <fstream>
 #include <deque>
 #include <algorithm>
 #include <windows.h>
@@ -21,9 +22,12 @@
 #include "tinyfiledialogs/tinyfiledialogs.h"
 
 
+SDL_Event e;
 SDL_Window* window;
 SDL_Renderer* renderer;
-SDL_Event e;
+SDL_PropertiesID properties;
+SDL_DisplayID currentDisplay;
+
 
 ImFont* guiFont;
 ImFont* consoleFont;
@@ -33,26 +37,38 @@ constexpr ImU32 GRAY = IM_COL32(150, 150, 150, 255);
 constexpr ImU32 DARK_GRAY = IM_COL32(100, 100, 100, 255);
 constexpr ImGuiWindowFlags mainWindowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar;
 
-const int WIDTH = 720, HEIGHT = 720;
+
 bool running = true;
-bool autoscroll = false;
+
 bool yoinking = false;
-char ytLink[2048] = "https://www.youtube.com/watch?v=HpyZEzrDf4c";
+char ytLink[1024]{};
 char pathYTDLP[1024] = "C:/Users/david/Downloads/yt-dlp.exe";
 char pathFF[1024] = "C:/Users/david/Downloads";
 char pathOutput[1024] = "C:/Users/david/Downloads";
 bool checkAudio = false;
 bool checkVideo = false;
 bool checkPlaylist = false;
+
+
+
+
+const int BASE_WIDTH = 800, BASE_HEIGHT = 500;
+int width = BASE_WIDTH, height = BASE_HEIGHT;
+float scale = 1.0f;
+bool logScroll = false;
+
 std::deque<std::string> logLines;
-const size_t MAX_LOG_LINES = 10000; // adjust this based on memory budget
+const size_t MAX_LOG_LINES = 10000;
+
+
+
 
 
 void log(const std::string& msg) {
     logLines.push_back("[Yoink] " + msg);
-    if (logLines.size() > MAX_LOG_LINES)
+    while (logLines.size() > MAX_LOG_LINES)
         logLines.pop_front();
-    autoscroll = true;
+    logScroll = true;
 }
 
 
@@ -160,7 +176,7 @@ void yoink(std::string command) {
         while ((pos = lineBuffer.find_first_of("\r\n")) != std::string::npos) {
             logLines.push_back(lineBuffer.substr(0, pos + 1));
             lineBuffer.erase(0, pos + 1);
-            autoscroll = true;
+            logScroll = true;
         }
     }
 
@@ -173,6 +189,29 @@ void yoink(std::string command) {
 }
 
 
+void rescale(bool recenter) {
+    float currentScale = SDL_GetWindowDisplayScale(window);
+
+    if (currentScale != scale) {
+        // rescale the window
+        scale = currentScale;
+        width = BASE_WIDTH * scale;
+        height = BASE_HEIGHT * scale;
+        SDL_SetWindowSize(window, width, height);
+        if (recenter) {
+            SDL_Rect displayBounds;
+            SDL_GetDisplayBounds(SDL_GetDisplayForWindow(window), &displayBounds);
+            int newX = displayBounds.x + (displayBounds.w - (width)) / 2;
+            int newY = displayBounds.y + (displayBounds.h - (height)) / 2;
+            SDL_SetWindowPosition(window, newX, newY);
+        }
+        // rescale fonts
+        ImGuiIO& io = ImGui::GetIO();
+        io.FontGlobalScale = scale;
+    }
+}
+
+
 int init() {
     // SDL components
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -180,12 +219,13 @@ int init() {
         return 1;
     }
 
-    window = SDL_CreateWindow("YoinkTube", WIDTH, HEIGHT, SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    window = SDL_CreateWindow("YoinkTube", BASE_WIDTH, BASE_HEIGHT, SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_RESIZABLE);
     if (window == nullptr) {
         SDL_Log("SDL could not initialize window. SDL error: %s\n", SDL_GetError());
         return 1;
     }
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    SDL_SetWindowResizable(window, false);
 
     renderer = SDL_CreateRenderer(window, nullptr);
     if (renderer == nullptr) {
@@ -195,19 +235,19 @@ int init() {
 
     SDL_zero(e);
 
-
     // imgui components
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsLight();
 
     ImGuiIO& io = ImGui::GetIO(); (void)io;
-    guiFont = io.Fonts->AddFontFromFileTTF("res/Segoe-UI-Variable-Static-Text.ttf", 26.0f);
+    io.IniFilename = NULL;
+    guiFont = io.Fonts->AddFontFromFileTTF("res/Segoe-UI-Variable-Static-Text.ttf", 18.0f);
     if (guiFont == nullptr) {
         log("Could not load font for GUI");
         return 1;
     }
-    consoleFont = io.Fonts->AddFontFromFileTTF("res/CascadiaMono-VariableFont_wght.ttf", 18.0f);
+    consoleFont = io.Fonts->AddFontFromFileTTF("res/CascadiaMono-VariableFont_wght.ttf", 14.0f);
     if (consoleFont == nullptr) {
         log("Could not load font for subconsole");
         return 1;
@@ -215,6 +255,16 @@ int init() {
 
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer3_Init(renderer);
+
+    rescale(true); // rescale the entire gui
+
+
+    std::ifstream s("./config.txt");
+    if (s.is_open()) {
+        std::cout << "opened" << std::endl;
+    }
+    s.close();
+
 
     return 0;
 }
@@ -236,11 +286,16 @@ void shutdown() {
 void pushDrawInputText() {
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, WIDGET_ROUNDING);
+    ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, LIGHT_GRAY);
+    int textInputWidth = width / 1.3;
+    ImGui::PushItemWidth(textInputWidth);
 }
 
 
 void popDrawInputText() {
     ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(1);
+    ImGui::PopItemWidth();
 }
 
 
@@ -258,18 +313,26 @@ void popDrawButton() {
 }
 
 
+
+
+
 void draw() {
-    int windowHeight = 318;
-    ImVec2 inputTextRef, buttonRefPos, buttonRefSize;
+    
+    ImVec2 inputTextRef, buttonRefPos, buttonRefSize, remaining;
+    int mainWindowHeight = height / 2.2;
+    int dummyHeight = 10 * scale;
+    int dummyHeight2 = 15 * scale;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2(WIDTH, windowHeight));
+    ImGui::SetNextWindowSize(ImVec2(width, mainWindowHeight));
     ImGui::Begin("main", nullptr, mainWindowFlags);
 
     ImGui::Text("YT-DLP Executable");
     ImGui::SameLine();
     pushDrawInputText();
+    
     ImGui::InputText("##pathYTDLP", pathYTDLP, IM_ARRAYSIZE(pathYTDLP));
+    
     popDrawInputText();
     inputTextRef = ImGui::GetItemRectMin(); // to line up other input text widgets
     ImGui::SameLine();
@@ -320,32 +383,46 @@ void draw() {
     }
     popDrawButton();
 
-    ImGui::Dummy(ImVec2(0, 10));
-    //ImGui::SeparatorText("Options");
+    ImGui::Dummy(ImVec2(0, dummyHeight));
     ImGui::Separator();
-    ImGui::Dummy(ImVec2(0, 10));
+    ImGui::Dummy(ImVec2(0, dummyHeight));
 
     ImGui::Text("Options");
     ImGui::SameLine();
     ImGui::SetCursorPosX(inputTextRef.x);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, WIDGET_ROUNDING);
+    ImGui::PushStyleColor(ImGuiCol_CheckMark, IM_COL32(0, 0, 0, 255));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, LIGHT_GRAY);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, GRAY);
     ImGui::Checkbox("Audio", &checkAudio);
     ImGui::SameLine();
     ImGui::Checkbox("Video", &checkVideo);
     ImGui::SameLine();
     ImGui::Checkbox("Playlist", &checkPlaylist);
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
 
     ImGui::Text("YouTube Link");
     ImGui::SameLine();
     ImGui::SetCursorPosX(inputTextRef.x);
-    ImGui::SetNextItemWidth(buttonRefPos.x + buttonRefSize.x - inputTextRef.x);
     pushDrawInputText();
     ImGui::InputText("##ytLink", ytLink, IM_ARRAYSIZE(ytLink));
     popDrawInputText();
-    ImGui::Dummy(ImVec2(0, 25));
+    ImGui::SameLine();
+    pushDrawButton();
+    if (ImGui::Button("Clear")) {
+        memset(ytLink, '\0', sizeof(ytLink));
+    }
+    popDrawButton();
+    remaining = ImGui::GetItemRectMin();
+    //ImGui::Dummy(ImVec2(0, dummyHeight2));
 
     float windowWidth = ImGui::GetWindowSize().x;
+    float windowHeight = ImGui::GetWindowSize().y;
     float buttonWidth = ImGui::CalcTextSize("Yoink").x + ImGui::GetStyle().FramePadding.x * 2;
     ImGui::SetCursorPosX((windowWidth - buttonWidth) * 0.5f);
+    ImGui::SetCursorPosY(windowHeight - ((windowHeight - remaining.y) * 0.5f));
     if (yoinking) ImGui::BeginDisabled();
     pushDrawButton();
     if (ImGui::Button("Yoink") && !yoinking) {
@@ -400,27 +477,32 @@ void draw() {
     }
     popDrawButton();
     if (yoinking) ImGui::EndDisabled();
-    ImGui::Dummy(ImVec2(0, 25));
     ImGui::End(); // end of main window
     
-    ImGui::SetNextWindowPos(ImVec2(0, windowHeight));
-    ImGui::SetNextWindowSize(ImVec2(WIDTH, HEIGHT - windowHeight));
+    ImGui::SetNextWindowPos(ImVec2(0, mainWindowHeight));
+    ImGui::SetNextWindowSize(ImVec2(width, height - mainWindowHeight));
+    ImGui::PushStyleColor(ImGuiCol_Border, 0);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, LIGHT_GRAY);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, LIGHT_GRAY);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 255));
     ImGui::Begin("Log", nullptr, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
     ImGui::PushFont(consoleFont);
     for (const std::string& line : logLines) {
         ImGui::TextUnformatted(line.c_str());
     }
-    if (autoscroll) {
+    if (logScroll) {
         ImGui::SetScrollHereY(1.0f);
-        autoscroll = false;
+        logScroll = false;
     }
     ImGui::PopFont();
+    ImGui::PopStyleColor(5);
     ImGui::End();
 }
 
 
 int main(int argc, char* args[]) {
-    log("YoinkTube started");
+    log("YoinkTube Application Started");
 
     if (init() == 1) {
         log("YoinkTube failed");
@@ -429,36 +511,49 @@ int main(int argc, char* args[]) {
     }
 
     while (running) {
-        // setup imgui to create a new frame
-        ImGui_ImplSDLRenderer3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
-
-        // poll all events
+        int w, h;
+        SDL_GetWindowSize(window, &w, &h);
+        //std::cout << w << " " << h << std::endl;
+        // poll events
         while (SDL_PollEvent(&e)) {
             ImGui_ImplSDL3_ProcessEvent(&e);
             if (e.type == SDL_EVENT_QUIT) {
                 running = false;
                 break;
+            } else if (e.type == SDL_EVENT_WINDOW_MOVED) {
+                rescale(false);
+            } else if (e.type == SDL_EVENT_WINDOW_RESIZED) {
+                SDL_GetWindowSize(window, &width, &height);
             }
         }
 
+        // setup imgui to create a new frame
+        ImGui_ImplSDLRenderer3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+
         // clear the screen
-        SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
+        SDL_SetRenderDrawColor(renderer, 250, 200, 152, 255);
         SDL_RenderClear(renderer);
 
-        // render imgui
+        // render content
         draw();
         ImGui::Render();
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
 
-        // render sdl and show the screen
+        // render sdl, show the screen, and sleep briefly to reduce CPU load
         SDL_RenderPresent(renderer);
-
-        // sleep briefly to reduce CPU load
         SDL_Delay(10);
     }
 
     shutdown();
     return 0;
 }
+
+
+
+
+/*
+save inputted text
+update the readme
+*/
