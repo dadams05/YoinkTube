@@ -145,7 +145,7 @@ void yoink(std::string command) {
     si.hStdError = hWrite; // redirect child error to the new pipe
     si.wShowWindow = SW_HIDE; // specify to hide the window
 
-    //std::string workingDir = "C:\\";
+    std::string workingDir = "C:\\";
     bool success = CreateProcessA(
         nullptr,             // lpApplicationName (null = take from cmdLine)
         cmdLine,             // full command line (must be mutable)
@@ -154,8 +154,7 @@ void yoink(std::string command) {
         TRUE,                // inherit handles (required for our pipe to work!)
         CREATE_NO_WINDOW,    // don’t open a new console window
         nullptr,             // environment (null = inherit from parent)
-        //workingDir.c_str(),             // current directory (null = inherit)
-        nullptr,
+        nullptr,             // current directory (null = inherit)
         &si,                 // startup info (controls redirection, visibility)
         &pi                  // receives process info
     );
@@ -412,16 +411,6 @@ void draw() {
 /* control functions */
 
 void shutdown() {
-    // write config
-    std::ofstream s("./config.txt");
-    if (s.is_open()) {
-        s << "[FFmpeg]" << std::string(pathFF) << "\n";
-        s << "[Link]" << std::string(ytLink) << "\n";
-        s << "[Output]" << std::string(pathOutput) << "\n";
-        s << "[YTDLP]" << std::string(pathYTDLP) << "\n";
-        s.close();
-    }
-
     // imgui components
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
@@ -483,22 +472,16 @@ bool init() {
     if (configFile.is_open()) {
         std::string line;
         long foundPos;
-
         while (std::getline(configFile, line)) {
             foundPos = line.find("]");
             if (foundPos != std::string::npos) {
-                std::string key = line.substr(1, foundPos);
-                std::string value = line.substr(foundPos);
+                std::string key = line.substr(1, foundPos - 1);
+                std::string value = line.substr(foundPos + 1, sizeof(line) - foundPos);
                 if (key == "FFmpeg") {
-                    memcpy_s(ytLink, sizeof(ytLink), value.c_str(), value.size() + 1);
-                }
-                else if (key == "Link") {
-                    memcpy_s(pathOutput, sizeof(pathOutput), value.c_str(), value.size() + 1);
-                }
-                else if (key == "Output") {
                     memcpy_s(pathFF, sizeof(pathFF), value.c_str(), value.size() + 1);
-                }
-                else if (key == "YTDLP") {
+                } else if (key == "Output") {
+                    memcpy_s(pathOutput, sizeof(pathOutput), value.c_str(), value.size() + 1);
+                } else if (key == "YTDLP") {
                     memcpy_s(pathYTDLP, sizeof(pathYTDLP), value.c_str(), value.size() + 1);
                 }
             }
@@ -524,6 +507,15 @@ int main(int argc, char* args[]) {
         while (SDL_PollEvent(&e)) {
             ImGui_ImplSDL3_ProcessEvent(&e);
             if (e.type == SDL_EVENT_QUIT) {
+                // write config
+                std::ofstream s("./config.txt");
+                if (s.is_open()) {
+                    s << "[FFmpeg]" << std::string(pathFF) << "\n"; 
+                    s << "[Output]" << std::string(pathOutput) << "\n";
+                    s << "[YTDLP]" << std::string(pathYTDLP) << "\n";
+                    s.close();
+                }
+
                 running = false;
                 break;
             } else if (e.type == SDL_EVENT_WINDOW_MOVED) {
