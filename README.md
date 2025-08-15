@@ -18,13 +18,14 @@ This project was created in C++17 and is only known to work on Windows 11.
 
 ### Notes
 
-- The program does not check if the youtube link put in is valid or not
+- The program does not check if the youtube link put in is valid or not.
 - When trying to download a playlist, put in the actual link of the playlist, not a link of one of the videos that is in the playlist. Example:
 	- Wrong -> https://www.youtube.com/watch?v=awhnYyXQpnQ&list=PL9KOTjOvdEji-iVaOvjr6crQGeWBllYoT&index=33
 	- Correct -> https://www.youtube.com/playlist?list=PL9KOTjOvdEji-iVaOvjr6crQGeWBllYoT
-- This program has not been tested on Windows 10 or Linux
-- For audio, the program will download the highest quality audio and then convert it into MP3
-- For video, the program will download teh highest quality audio and highest quality video, and then merge them. As a result, the video file may be of any kind (MP4, webm, etc)
+- This program only been tested on Windows 11.
+- For audio, the program will download the highest quality audio and then convert it into MP3.
+- For video, the program will download the highest quality audio and highest quality video, and then merge them. The video file may be of any kind (MP4, webm, etc), whichever had the highest quality.
+- The program will save the paths put into it into a *config.txt* file and autopopulate the fields when you run it again.
 
 ## Screenshots
 
